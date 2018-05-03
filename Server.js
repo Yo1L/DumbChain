@@ -1,6 +1,7 @@
 var express = require("express");
 var bodyParser = require('body-parser');
 var WebSocket = require("ws");
+var WSClient = require('./WSClient');
 
 const MessageType = {
     QUERY_LATEST: 0,
@@ -9,47 +10,93 @@ const MessageType = {
 };
 
 module.exports = class Server {
-    constructor(http_port, ws_port) {
-        this.http_port = http_port;
-        this.ws_port = ws_port;
-        this.ws_sockets = [];
+    constructor(httpPort, wsPort) {
+        this.httpPort = httpPort;
+        this.wsPort = wsPort;
+        this.wsClients = [];
 
         this.http = express();
-        this.ws = new WebSocket.Server({port: this.ws_port});
+        console.log("WebSocket Server on port:" + this.wsPort);
+        this.ws = new WebSocket.Server({port: this.wsPort});
     }
 
     startHTTP() {
-        this.http.use(bodyParser.json);
+        var jsonParser = bodyParser.json();
 
         this.http.get('/', (req, res) => {
             res.send("hello world");
         });
 
-        this.http.listen(this.http_port, () => {
-            console.log("Ready to listen on port:" + this.http_port)
+        // Add a new peer
+        // curl -d '{"peer":"ws://127.0.0.1:6000"}' localhost:3000/peer/add -H "Content-Type: application/json"
+        this.http.post('/peer/add', jsonParser, (req, res) => {
+            if (!req.body && !req.body.peer) {
+                return res.sendStatus(400);
+            }
+            var peer = req.body.peer;
+            var ws = new WebSocket(peer);
+            var vm = this;
+
+            ws.on('open', () => {
+                vm.addWSClient(ws);
+            });
+            ws.on('error', () => {
+                console.log('Failed adding peer:' + peer);
+            });
+
+            return res.sendStatus(200);
+        });
+
+        // list peers
+        this.http.get('/peer', (req, res) => {
+            res.send(this.wsClients.map(s => s.ws._socket.remoteAddress + ':' + s.ws._socket.remotePort));
+        });
+
+        this.http.listen(this.httpPort, () => {
+            console.log("HTTP on port:" + this.httpPort)
         });
     }
 
     startWS() {
         this.ws.on('connection', ws => {
-            var vm = this;
-            this.ws_sockets.push(new WSClient(ws, (ws, message) => {
-                switch (message.type) {
-                    case MessageType.QUERY_LATEST:
-                        //write(ws, responseLatestMsg());
-                        break;
-                    case MessageType.QUERY_ALL:
-                        //write(ws, responseChainMsg());
-                        break;
-                    case MessageType.RESPONSE_BLOCKCHAIN:
-                        //handleBlockchainResponse(message);
-                        break;
-                }
-            },
-            ws => {
-                vm.ws_sockets.splice(vm.ws_sockets.indexOf(ws), 1);
-            }))
+            this.addWSClient(ws);
         });
+    }
+
+    addWSClient(ws) {
+        var vm = this;
+
+        var wsClient = new WSClient(ws);
+
+        wsClient.onMessage = (wsClient, message) => {
+            console.log(message);
+            switch (message.type) {
+                case MessageType.QUERY_LATEST:
+                    //write(wsClient.ws, responseLatestMsg());
+                    break;
+                case MessageType.QUERY_ALL:
+                    //write(wsClient.ws, responseChainMsg());
+                    wsClient.send("ALL BLOCKS");
+                    break;
+                case MessageType.RESPONSE_BLOCKCHAIN:
+                    //handleBlockchainResponse(message);
+                    break;
+            }
+        };
+
+        wsClient.onDelete = wsClient => {
+            vm.wsClients.splice(vm.wsClients.indexOf(wsClient), 1);
+        };
+
+        wsClient.send({
+            type: MessageType.QUERY_ALL
+        });
+
+        this.wsClients.push(wsClient);
+    }
+
+    broadcastWS(message) {
+        this.wsClients.forEach(wsClient => wsClient.send(message));
     }
 
     start() {
