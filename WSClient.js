@@ -12,7 +12,7 @@ module.exports = class WSClient {
         var vm = this;
         this.ws.on('message', (data) => {
             var message = JSON.parse(data);
-            console.log('Received message' + JSON.stringify(message));
+            console.log('Received message' + data);
 
             if (vm.onMessage) {
                 vm.onMessage(vm, message);
@@ -21,10 +21,12 @@ module.exports = class WSClient {
     }
 
     initErrorHandler(onDelete) {
-        if (this.onDelete) {
-            this.ws.on('close', () => this.onDelete(this));
-            this.ws.on('error', () => this.onDelete(this));
+        var vm = this;
+        var clean = () => {
+            if (vm.onDelete) vm.onDelete(vm);
         }
+        this.ws.on('close', () => clean());
+        this.ws.on('error', () => clean());
     }
 
     send(message) {
